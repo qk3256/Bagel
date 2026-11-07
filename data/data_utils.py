@@ -23,19 +23,28 @@ def create_sparse_mask(document_lens, split_lens, attn_modes, device):
     def sample_mask(b, h, q_idx, kv_idx):
         return document_id[q_idx] == document_id[kv_idx]
 
-    full_and_noise_tmp = []
-    noise_tmp = []
-
-    for i, (length, model) in enumerate(zip(split_lens, attn_modes)):
-        value = i if model in ['full', 'noise'] else -1
-        full_and_noise_tmp.extend([value] * length)
-        value_noise = i if model == 'noise' else -1
-        noise_tmp.extend([value_noise] * length)
-
-    full_and_noise_seq_id = torch.Tensor(full_and_noise_tmp).to(device)
-    noise_seq_id = torch.Tensor(noise_tmp).to(device)
-
-    document_id = torch.cat([torch.full((l,), i) for i, l in enumerate(document_lens, start=1)]).to(device)
+    full_and_noise_seq_id = torch.cat([
+        torch.full(
+            (length,),
+            i if mode in ['full', 'noise'] else -1,
+            dtype=torch.float32,
+            device=device,
+        )
+        for i, (length, mode) in enumerate(zip(split_lens, attn_modes))
+    ])
+    noise_seq_id = torch.cat([
+        torch.full(
+            (length,),
+            i if mode == 'noise' else -1,
+            dtype=torch.float32,
+            device=device,
+        )
+        for i, (length, mode) in enumerate(zip(split_lens, attn_modes))
+    ])
+    document_id = torch.cat([
+        torch.full((length,), i, dtype=torch.int64, device=device)
+        for i, length in enumerate(document_lens, start=1)
+    ])
 
     return and_masks(or_masks(causal_mask, full_and_noise_mask), remove_noise_mask, sample_mask)
 
