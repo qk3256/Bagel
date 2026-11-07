@@ -40,6 +40,14 @@ construction and two from timestep-frequency construction). The measured step
 change is within run-to-run noise, because 12 Flex Attention internal copies
 and eight profiler-bookkeeping copies still provide a later host wait point.
 
-This change is retained as a correctness-preserving cleanup, but is not claimed
-as an end-to-end performance win. A profiler-free repeated-step benchmark is
-required to separate application behavior from profiler synchronization.
+## Profiler-free repeated benchmark
+
+Three independent 12-step runs produced median-of-run step times of 833.33,
+800.00, and 803.23ms. Their median is 803.23ms, which is 2.8% slower than the
+retained non-blocking variant's 781.44ms. The full loss sequence still matched
+the baseline exactly and memory was unchanged.
+
+The device-native implementation launches multiple `full` and `cat` kernels to
+replace very small copies. Reducing copy count did not reduce the remaining
+wait time and added dispatch work. The code change is therefore rolled back;
+this document and its isolated Git commit preserve the negative result.

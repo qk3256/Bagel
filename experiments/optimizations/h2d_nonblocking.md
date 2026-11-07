@@ -46,5 +46,20 @@ the same synchronization time. Call-stack analysis attributes these copies to:
 - profiler bookkeeping: 8 copies.
 
 The non-blocking change is retained because it is correct and removes an
-avoidable serialization point. Device-native mask/timestep tensor creation is
-the next isolated experiment.
+avoidable serialization point.
+
+## Profiler-free repeated benchmark
+
+Three independent 12-step runs were executed per variant. Steps 0-1 were
+discarded, and the median of each run's remaining ten step times was computed.
+
+| Variant | Run medians | Median of runs |
+| --- | --- | ---: |
+| Baseline | 790.53, 806.45, 813.01ms | 806.45ms |
+| Non-blocking | 847.46, 781.44, 778.22ms | 781.44ms |
+
+The median-of-runs improvement is 3.1%. The first non-blocking run was slower,
+which shows the amount of run-to-run variance and is why the profiler-only
+comparison was not sufficient. Across all runs, the full 12-step MSE and CE
+sequences matched exactly at logged precision. Peak allocated memory remained
+32,171.88 MiB.
