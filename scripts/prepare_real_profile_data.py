@@ -19,7 +19,7 @@ from PIL import Image
 
 
 COCO_ANNOTATIONS_URL = (
-    "https://images.cocodataset.org/annotations/annotations_trainval2017.zip"
+    "http://images.cocodataset.org/annotations/annotations_trainval2017.zip"
 )
 VQA_QUESTIONS_URL = (
     "https://cvmlp.s3.amazonaws.com/vqa/mscoco/vqa/"
@@ -189,7 +189,7 @@ def main():
 
     def fetch_coco(image_id):
         filename = f"{image_id:012d}.jpg"
-        url = f"https://images.cocodataset.org/train2017/{filename}"
+        url = f"http://images.cocodataset.org/train2017/{filename}"
         path = download_file(url, coco_dir / filename)
         validate_image(path.read_bytes())
         return image_id, filename, path
