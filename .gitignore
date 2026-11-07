@@ -9,3 +9,10 @@ tests
 .DS_Store
 gradio.sh
 data_example
+
+# Local training assets and profiler artifacts
+models/
+data/bagel_example/
+traces/
+*.pt.trace.json
+*.nsys-rep
