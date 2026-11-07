@@ -115,6 +115,7 @@ class Bagel(PreTrainedModel):
         packed_vit_token_indexes: Optional[torch.LongTensor] = None,
         packed_vit_position_ids: Optional[torch.LongTensor] = None,
         vit_token_seqlens: Optional[torch.IntTensor] = None,
+        vit_max_seqlen: Optional[int] = None,
         # for visual generation
         padded_latent: Optional[torch.Tensor] = None,
         patchified_vae_latent_shapes: Optional[List[Tuple[int, int]]] = None,
@@ -122,6 +123,7 @@ class Bagel(PreTrainedModel):
         packed_vae_token_indexes: Optional[torch.LongTensor] = None,
         packed_timesteps: Optional[torch.LongTensor] = None,
         mse_loss_indexes: Optional[torch.BoolTensor] = None,
+        mse_target_indexes: Optional[torch.LongTensor] = None,
     ) -> torch.Tensor:
         """
         Args:
@@ -169,12 +171,11 @@ class Bagel(PreTrainedModel):
             with torch.profiler.record_function("bagel::vit_path"):
                 cu_seqlens = torch.nn.functional.pad(torch.cumsum(vit_token_seqlens, dim=0), (1, 0))
                 cu_seqlens = cu_seqlens.to(torch.int32)
-                max_seqlen = torch.max(vit_token_seqlens).item()
                 packed_vit_token_embed = self.vit_model(
                     packed_pixel_values=packed_vit_tokens,
                     packed_flattened_position_ids=packed_vit_position_ids,
                     cu_seqlens=cu_seqlens,
-                    max_seqlen=max_seqlen,
+                    max_seqlen=vit_max_seqlen,
                 )
                 packed_vit_token_embed = self.connector(packed_vit_token_embed)
                 vit_token_pos_emb = self.vit_pos_embed(packed_vit_position_ids)
@@ -225,8 +226,7 @@ class Bagel(PreTrainedModel):
             if self.config.visual_gen:
                 packed_mse_preds = self.llm2vae(last_hidden_state[mse_loss_indexes])
                 target = noise - packed_latent_clean # NOTE: v_t=dx_t/dt=x_1-x_0, pointing from data to noise
-                has_mse = packed_timesteps > 0
-                mse = (packed_mse_preds - target[has_mse]) ** 2
+                mse = (packed_mse_preds - target[mse_target_indexes]) ** 2
 
             ce = None
             if ce_loss_indexes is not None:

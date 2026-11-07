@@ -221,11 +221,13 @@ class PackedDataset(torch.utils.data.IterableDataset):
             data['packed_vit_position_ids'] = torch.cat(sequence_status['packed_vit_position_ids'], dim=0)
             data['packed_vit_token_indexes'] = torch.tensor(sequence_status['packed_vit_token_indexes'])
             data['vit_token_seqlens'] = torch.tensor(sequence_status['vit_token_seqlens'])
+            data['vit_max_seqlen'] = max(sequence_status['vit_token_seqlens'])
 
         # if the model is required to perform visual generation
         if len(sequence_status['packed_timesteps']) > 0:
             data['packed_timesteps'] = torch.tensor(sequence_status['packed_timesteps'])
             data['mse_loss_indexes'] = torch.tensor(sequence_status['mse_loss_indexes'])
+            data['mse_target_indexes'] = torch.isfinite(data['packed_timesteps']).nonzero().flatten()
 
         # if the model is required to perform text generation
         if len(sequence_status['packed_label_ids']) > 0:
@@ -504,10 +506,12 @@ class SimpleCustomBatch:
             self.packed_vit_position_ids = data["packed_vit_position_ids"]
             self.packed_vit_token_indexes = data["packed_vit_token_indexes"]
             self.vit_token_seqlens = data["vit_token_seqlens"]
+            self.vit_max_seqlen = data["vit_max_seqlen"]
 
         if "packed_timesteps" in data.keys():
             self.packed_timesteps = data["packed_timesteps"]
             self.mse_loss_indexes = data["mse_loss_indexes"]
+            self.mse_target_indexes = data["mse_target_indexes"]
 
         if "packed_label_ids" in data.keys():
             self.packed_label_ids = data["packed_label_ids"]
@@ -530,6 +534,7 @@ class SimpleCustomBatch:
         if hasattr(self, 'packed_timesteps'):
             self.packed_timesteps = self.packed_timesteps.pin_memory()
             self.mse_loss_indexes = self.mse_loss_indexes.pin_memory()
+            self.mse_target_indexes = self.mse_target_indexes.pin_memory()
 
         if hasattr(self, 'packed_vit_tokens'):
             self.packed_vit_tokens = self.packed_vit_tokens.pin_memory()
@@ -563,6 +568,7 @@ class SimpleCustomBatch:
         if hasattr(self, 'packed_timesteps'):
             self.packed_timesteps = self.packed_timesteps.to(device, non_blocking=non_blocking)
             self.mse_loss_indexes = self.mse_loss_indexes.to(device, non_blocking=non_blocking)
+            self.mse_target_indexes = self.mse_target_indexes.to(device, non_blocking=non_blocking)
 
         if hasattr(self, 'packed_vit_tokens'):
             self.packed_vit_tokens = self.packed_vit_tokens.to(device, non_blocking=non_blocking)
@@ -604,10 +610,12 @@ class SimpleCustomBatch:
             data['packed_vit_position_ids'] = self.packed_vit_position_ids
             data['packed_vit_token_indexes'] = self.packed_vit_token_indexes
             data['vit_token_seqlens'] = self.vit_token_seqlens
+            data['vit_max_seqlen'] = self.vit_max_seqlen
 
         if hasattr(self, 'packed_timesteps'):
             data['packed_timesteps'] = self.packed_timesteps
             data['mse_loss_indexes'] = self.mse_loss_indexes
+            data['mse_target_indexes'] = self.mse_target_indexes
 
         if hasattr(self, 'packed_label_ids'):
             data['packed_label_ids'] = self.packed_label_ids
