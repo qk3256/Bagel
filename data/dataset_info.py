@@ -33,6 +33,14 @@ DATASET_INFO = {
             'num_total_samples': 1000,
             "parquet_info_path": os.path.join(DATA_ROOT, 'editing/parquet_info/seedxedit_multi_nas.json'), # information of the parquet files
 		},
+        'magicbrush_real': {
+            'data_dir': os.path.join(DATA_ROOT, 'editing/magicbrush'),
+            'num_files': 4,
+            'num_total_samples': 256,
+            'parquet_info_path': os.path.join(
+                DATA_ROOT, 'editing/parquet_info/magicbrush.json'
+            ),
+        },
     },
     'vlm_sft': {
         'llava_ov': {
@@ -40,5 +48,15 @@ DATASET_INFO = {
 			'jsonl_path': os.path.join(DATA_ROOT, 'vlm/llava_ov_si.jsonl'),
 			'num_total_samples': 1000
 		},
+        'coco_caption_real': {
+            'data_dir': os.path.join(DATA_ROOT, 'shared/coco'),
+            'jsonl_path': os.path.join(DATA_ROOT, 'vlm/coco_caption.jsonl'),
+            'num_total_samples': 256,
+        },
+        'vqa_v2_real': {
+            'data_dir': os.path.join(DATA_ROOT, 'shared/coco'),
+            'jsonl_path': os.path.join(DATA_ROOT, 'vlm/vqa_v2.jsonl'),
+            'num_total_samples': 256,
+        },
     },
 }

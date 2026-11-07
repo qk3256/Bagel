@@ -7,6 +7,7 @@ TORCHRUN="${TORCHRUN:-$HOME/miniconda3/envs/bagel/bin/torchrun}"
 TOTAL_STEPS="${TOTAL_STEPS:-2}"
 RUN_NAME="${RUN_NAME:-single-a100-smoke}"
 RESULTS_DIR="${RESULTS_DIR:-$REPO_ROOT/results/$RUN_NAME}"
+DATASET_CONFIG="${DATASET_CONFIG:-data/configs/single_a100_smoke.yaml}"
 
 cd "$REPO_ROOT"
 export PYTHONPATH="$REPO_ROOT${PYTHONPATH:+:$PYTHONPATH}"
@@ -16,7 +17,7 @@ export TOKENIZERS_PARALLELISM=false
 
 "$TORCHRUN" --standalone --nnodes=1 --nproc_per_node=1 \
   train/pretrain_unified_navit.py \
-  --dataset_config_file data/configs/single_a100_smoke.yaml \
+  --dataset_config_file "$DATASET_CONFIG" \
   --llm_path models/Qwen2.5-0.5B-Instruct \
   --vit_path models/siglip-so400m-patch14-384 \
   --vae_path models/BAGEL-7B-MoT/ae.safetensors \
