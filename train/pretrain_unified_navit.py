@@ -617,7 +617,7 @@ def main():
         betas=(training_args.beta1, training_args.beta2), 
         eps=training_args.eps, 
         weight_decay=0,
-        fused=training_args.fused_adamw,
+        fused=True if training_args.fused_adamw else None,
     )
     if training_args.lr_scheduler == 'cosine':
         scheduler = get_cosine_with_min_lr_schedule_with_warmup(
