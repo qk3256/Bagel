@@ -285,6 +285,10 @@ class TrainingArguments:
         default=2000,
         metadata={"help": "Save a checkpoint every N training steps."}
     )
+    save_final_checkpoint: bool = field(
+        default=True,
+        metadata={"help": "Save model, EMA, and optimizer state when training exits."}
+    )
     total_steps: int = field(
         default=500_000,
         metadata={"help": "Total number of optimizer steps to train for."}
@@ -402,6 +406,24 @@ class TrainingArguments:
     use_flex: bool = field(
         default=False,
         metadata={"help": "Enable FLEX (flash-ext friendly) packing algorithm for sequence data."}
+    )
+
+    # --- optional PyTorch Profiler capture ---
+    profile_dir: Optional[str] = field(
+        default=None,
+        metadata={"help": "Write a CPU/CUDA profiler trace here; disabled when unset."}
+    )
+    profile_wait: int = field(
+        default=1,
+        metadata={"help": "Profiler schedule wait steps."}
+    )
+    profile_warmup: int = field(
+        default=1,
+        metadata={"help": "Profiler schedule warmup steps."}
+    )
+    profile_active: int = field(
+        default=2,
+        metadata={"help": "Profiler schedule active capture steps."}
     )
 
 
@@ -663,6 +685,28 @@ def main():
     token_window = 0.0
     seqlen_square_window = 0.0
     dense_token_factor, attn_factor = qwen2_flop_coefficients(model.language_model.config)
+    profiler = None
+    if training_args.profile_dir is not None:
+        os.makedirs(training_args.profile_dir, exist_ok=True)
+        profiler = torch.profiler.profile(
+            activities=[
+                torch.profiler.ProfilerActivity.CPU,
+                torch.profiler.ProfilerActivity.CUDA,
+            ],
+            schedule=torch.profiler.schedule(
+                wait=training_args.profile_wait,
+                warmup=training_args.profile_warmup,
+                active=training_args.profile_active,
+                repeat=1,
+            ),
+            on_trace_ready=torch.profiler.tensorboard_trace_handler(
+                training_args.profile_dir
+            ),
+            record_shapes=True,
+            profile_memory=True,
+            with_stack=True,
+        )
+        profiler.start()
     for micro_step, data in enumerate(train_loader):
         curr_step = train_step + micro_step // training_args.gradient_accumulation_steps
         if curr_step >= training_args.total_steps:
@@ -832,9 +876,14 @@ def main():
             #     ema_state_dict, 
             #     os.path.join(training_args.checkpoint_dir, f"{curr_step:07d}", "ema_standard.pt")
             # )
+        if profiler is not None:
+            profiler.step()
+
+    if profiler is not None:
+        profiler.stop()
     
     # Save final checkpoint if not already saved
-    if curr_step > 0:
+    if curr_step > 0 and training_args.save_final_checkpoint:
         logger.info(f"Saving final checkpoint at step {curr_step}...")
         # Clear caches and ensure all CUDA operations complete before final checkpoint
         torch.cuda.empty_cache()
