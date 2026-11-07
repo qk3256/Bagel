@@ -15,6 +15,10 @@ ENV_PYTHON="$HOME/miniconda3/envs/$ENV_NAME/bin/python"
 sed '/^gradio$/d' requirements.txt | \
   "$ENV_PYTHON" -m pip install -i "$PYPI_INDEX" -r /dev/stdin
 
+# Runtime dependency omitted from upstream requirements.txt. Parquet loaders
+# call pyarrow.Table.to_pandas() for every row group.
+"$ENV_PYTHON" -m pip install -i "$PYPI_INDEX" pandas==2.0.3
+
 # The host's system nvcc may be older than the CUDA runtime bundled with torch.
 # Use the official wheel matching Python 3.10, CUDA 12, torch 2.5 and ABI=false.
 "$ENV_PYTHON" -m pip install \
