@@ -83,29 +83,34 @@ class TimestepEmbedder(nn.Module):
             nn.Linear(hidden_size, hidden_size, bias=True),
         )
         self.frequency_embedding_size = frequency_embedding_size
+        half = frequency_embedding_size // 2
+        frequencies = torch.exp(
+            -math.log(10000) * torch.arange(half, dtype=torch.float32) / half
+        )
+        # Keep the FP32 source outside FSDP's buffer casting. Cache one exact
+        # device copy lazily; the table is constant for the lifetime of the module.
+        self._timestep_frequencies_cpu = frequencies
+        self._timestep_frequencies_device = None
 
-    @staticmethod
-    def timestep_embedding(t, dim, max_period=10000):
+    def timestep_embedding(self, t):
         """
         Create sinusoidal timestep embeddings.
         :param t: a 1-D Tensor of N indices, one per batch element.
                           These may be fractional.
-        :param dim: the dimension of the output.
-        :param max_period: controls the minimum frequency of the embeddings.
         :return: an (N, D) Tensor of positional embeddings.
         """
-        half = dim // 2
-        freqs = torch.exp(
-            -math.log(max_period) * torch.arange(start=0, end=half, dtype=torch.float32) / half
-        ).to(device=t.device)
-        args = t[:, None].float() * freqs[None]
+        frequencies = self._timestep_frequencies_device
+        if frequencies is None or frequencies.device != t.device:
+            frequencies = self._timestep_frequencies_cpu.to(t.device)
+            self._timestep_frequencies_device = frequencies
+        args = t[:, None].float() * frequencies[None]
         embedding = torch.cat([torch.cos(args), torch.sin(args)], dim=-1)
-        if dim % 2:
+        if self.frequency_embedding_size % 2:
             embedding = torch.cat([embedding, torch.zeros_like(embedding[:, :1])], dim=-1)
         return embedding
 
     def forward(self, t):
-        t_freq = self.timestep_embedding(t, self.frequency_embedding_size)
+        t_freq = self.timestep_embedding(t)
         t_emb = self.mlp(t_freq)
         return t_emb
 
