@@ -324,6 +324,12 @@ class TrainingArguments:
         default=1e-15,
         metadata={"help": "AdamW ε for numerical stability."}
     )
+    fused_adamw: bool = field(
+        default=False,
+        metadata={
+            "help": "Use PyTorch's CUDA fused AdamW implementation instead of the default foreach path."
+        },
+    )
     ema: float = field(
         default=0.9999,
         metadata={"help": "Decay rate for the exponential moving average of model weights."}
@@ -610,7 +616,8 @@ def main():
         lr=training_args.lr, 
         betas=(training_args.beta1, training_args.beta2), 
         eps=training_args.eps, 
-        weight_decay=0
+        weight_decay=0,
+        fused=training_args.fused_adamw,
     )
     if training_args.lr_scheduler == 'cosine':
         scheduler = get_cosine_with_min_lr_schedule_with_warmup(
