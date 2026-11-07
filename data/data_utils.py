@@ -32,10 +32,18 @@ def create_sparse_mask(document_lens, split_lens, attn_modes, device):
         value_noise = i if model == 'noise' else -1
         noise_tmp.extend([value_noise] * length)
 
-    full_and_noise_seq_id = torch.Tensor(full_and_noise_tmp).to(device)
-    noise_seq_id = torch.Tensor(noise_tmp).to(device)
+    # These IDs are consumed only by the GPU-side flex-attention mask predicate.
+    # Construct them on the target device instead of creating float CPU tensors
+    # and synchronously copying them during every model forward.
+    full_and_noise_seq_id = torch.tensor(
+        full_and_noise_tmp, dtype=torch.int64, device=device
+    )
+    noise_seq_id = torch.tensor(noise_tmp, dtype=torch.int64, device=device)
 
-    document_id = torch.cat([torch.full((l,), i) for i, l in enumerate(document_lens, start=1)]).to(device)
+    document_id = torch.cat([
+        torch.full((length,), index, dtype=torch.int64, device=device)
+        for index, length in enumerate(document_lens, start=1)
+    ])
 
     return and_masks(or_masks(causal_mask, full_and_noise_mask), remove_noise_mask, sample_mask)
 
