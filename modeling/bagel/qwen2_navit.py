@@ -718,6 +718,7 @@ class Qwen2MoTDecoderLayer(nn.Module):
         packed_position_embeddings: Tuple[torch.Tensor, torch.Tensor],
         packed_und_token_indexes: torch.LongTensor,
         packed_gen_token_indexes: torch.LongTensor,
+        packed_token_permutation: torch.LongTensor,
     ) -> torch.Tensor:
 
         residual = packed_sequence
@@ -752,13 +753,8 @@ class Qwen2MoTDecoderLayer(nn.Module):
             gen_output = self.mlp_moe_gen(
                 self.post_attention_layernorm_moe_gen(packed_sequence[packed_gen_token_indexes])
             )
-            expert_indexes = torch.cat(
-                (packed_und_token_indexes, packed_gen_token_indexes), dim=0
-            )
             expert_output = torch.cat((und_output, gen_output), dim=0)
-            packed_sequence_ = packed_sequence.new_zeros(
-                packed_sequence.shape
-            ).index_copy(0, expert_indexes, expert_output)
+            packed_sequence_ = expert_output[packed_token_permutation]
         packed_sequence = residual + packed_sequence_
 
         return packed_sequence
@@ -866,6 +862,7 @@ class Qwen2MoEDecoderLayer(nn.Module):
         packed_position_embeddings: Tuple[torch.Tensor, torch.Tensor],
         packed_und_token_indexes: torch.LongTensor,
         packed_gen_token_indexes: torch.LongTensor,
+        packed_token_permutation: torch.LongTensor,
     ) -> torch.Tensor:
 
         residual = packed_sequence
@@ -1000,9 +997,14 @@ class Qwen2Model(Qwen2PreTrainedModel):
             assert packed_und_token_indexes is not None
             if packed_gen_token_indexes is None:
                 packed_gen_token_indexes = packed_und_token_indexes.new_ones(size=[0])
+            expert_indexes = torch.cat(
+                (packed_und_token_indexes, packed_gen_token_indexes), dim=0
+            )
+            packed_token_permutation = torch.argsort(expert_indexes)
             extra_inputs.update(
                 packed_und_token_indexes=packed_und_token_indexes,
                 packed_gen_token_indexes=packed_gen_token_indexes,
+                packed_token_permutation=packed_token_permutation,
             )
 
         for decoder_layer in self.layers:
