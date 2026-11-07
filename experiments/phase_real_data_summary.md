@@ -29,6 +29,15 @@ Main findings:
 
 Detailed evidence is in `experiments/multimodal/real_profile_20261107.md`, and dataset provenance/format is in `experiments/data/real_profile_dataset.md`.
 
+## Follow-up single-card optimization result
+
+The remaining single-card audit is documented in `experiments/optimizations/single_card_remaining_20261107.md`.
+
+- Strict-equivalence synchronization changes remove four model-forward synchronizations per step while preserving the complete loss sequence and 32168.88 MiB peak memory. Their three-run median is 819.67 ms versus 823.06 ms previously; the 0.41% difference is within noise.
+- Optional PyTorch fused AdamW reduces the optimizer from 469 to 68 kernels/step, lowers its CUDA time from 78.52 to 30.50 ms/step, and produces a three-run median of 763.40 ms with 27384.89 MiB peak memory.
+- Fused AdamW is deterministic but differs from foreach AdamW after the first update because of floating-point operation order. It remains opt-in until a longer convergence run is available.
+- Native/Triton RMSNorm, Triton LayerNorm, Triton RoPE, and compiled RoPE were tested or microbenchmarked and rejected for numerical or performance reasons.
+
 ## Relevant commits
 
 | Commit | Purpose | Final status |
@@ -39,6 +48,10 @@ Detailed evidence is in `experiments/multimodal/real_profile_20261107.md`, and d
 | `26f7521` | MoT `index_copy` merge experiment | preserved as negative experiment |
 | `c20a403` | MoT inverse-permutation experiment | preserved as negative experiment |
 | `faf1baa` | Restore original MoT behavior; build mask metadata on device | retained final implementation |
+| `e93b20c` / `b13b682` | Add opt-in fused AdamW while preserving the default foreach path | retained, opt-in |
+| `8d6ea33` | Move ViT scalar and MSE target indexes to CPU metadata | retained |
+| `805a773` | Keep single-rank statistics and normalization counts on CPU | retained |
+| `2ceda53` | Cache exact FP32 timestep frequencies outside FSDP casts | retained |
 
 ## Recommended next work
 
