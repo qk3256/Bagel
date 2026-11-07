@@ -13,6 +13,7 @@ data_example
 # Local training assets and profiler artifacts
 models/
 data/bagel_example/
+data/bagel_real_profile/
 traces/
 *.pt.trace.json
 *.nsys-rep
