@@ -9,10 +9,14 @@ wall-clock durations.
 import argparse
 import collections
 import json
+import re
 from pathlib import Path
 
 
 MIB = 1024 * 1024
+TOKEN_COUNTS_RE = re.compile(
+    r"bagel::token_counts::seq=(\d+)::text=(\d+)::vit=(\d+)::vae=(\d+)"
+)
 
 
 def contains(interval, event):
@@ -38,12 +42,20 @@ def main():
     with args.trace.open(encoding="utf-8") as stream:
         events = json.load(stream)["traceEvents"]
 
+    token_count_events = [
+        event
+        for event in events
+        if event.get("ph") == "X"
+        and event.get("cat") == "user_annotation"
+        and event.get("name", "").startswith("bagel::token_counts::")
+    ]
     ranges = [
         event
         for event in events
         if event.get("ph") == "X"
         and event.get("cat") == "user_annotation"
         and event.get("name", "").startswith("bagel::")
+        and not event.get("name", "").startswith("bagel::token_counts::")
     ]
     steps = [
         event
@@ -160,6 +172,64 @@ def main():
                     op[0] += event.get("dur", 0.0)
                     op[1] += 1
 
+    def union_duration_us(selected_events):
+        by_thread = collections.defaultdict(list)
+        for event in selected_events:
+            by_thread[(event["pid"], event["tid"])].append(
+                (event["ts"], event["ts"] + event.get("dur", 0.0))
+            )
+        total = 0.0
+        for intervals in by_thread.values():
+            end = None
+            for start, stop in sorted(intervals):
+                if end is None or start > end:
+                    total += stop - start
+                    end = stop
+                elif stop > end:
+                    total += stop - end
+                    end = stop
+        return total
+
+    audited_op_names = (
+        "IndexPutBackward0",
+        "autograd::engine::evaluate_function: IndexPutBackward0",
+        "aten::index_put_",
+        "aten::_index_put_impl_",
+        "aten::index",
+    )
+    audited_ops = {}
+    for op_name in audited_op_names:
+        selected = [
+            event
+            for event in events
+            if event.get("ph") == "X"
+            and event.get("cat") == "cpu_op"
+            and event.get("name") == op_name
+        ]
+        audited_ops[op_name] = {
+            "calls": len(selected),
+            "inclusive_total_ms": sum(
+                event.get("dur", 0.0) for event in selected
+            ) / 1000,
+            "same_name_union_ms": union_duration_us(selected) / 1000,
+        }
+
+    token_distributions = []
+    for event in token_count_events:
+        match = TOKEN_COUNTS_RE.fullmatch(event["name"])
+        if match:
+            sequence, text_tokens, vit_tokens, vae_tokens = map(int, match.groups())
+            token_distributions.append(
+                {
+                    "sequence": sequence,
+                    "text": text_tokens,
+                    "vit": vit_tokens,
+                    "vae": vae_tokens,
+                    "mot_und": text_tokens + vit_tokens,
+                    "mot_gen": vae_tokens,
+                }
+            )
+
     result = {
         "profiled_steps": len(steps),
         "mean_step_cpu_ms": (
@@ -167,6 +237,8 @@ def main():
             if steps
             else 0.0
         ),
+        "token_distributions": token_distributions,
+        "index_audit": audited_ops,
         "ranges": {},
     }
     for name, row in sorted(stats.items()):
@@ -201,6 +273,19 @@ def main():
 
     print(f"profiled steps: {result['profiled_steps']}")
     print(f"mean profiler step CPU wall: {result['mean_step_cpu_ms']:.3f} ms")
+    print("token distributions:")
+    for row in result["token_distributions"]:
+        print(
+            "  "
+            + ", ".join(f"{key}={value}" for key, value in row.items())
+        )
+    print("index audit (inclusive wrappers overlap; do not add them):")
+    for name, row in result["index_audit"].items():
+        print(
+            f"  {name}: calls={row['calls']}, "
+            f"inclusive_total_ms={row['inclusive_total_ms']:.3f}, "
+            f"same_name_union_ms={row['same_name_union_ms']:.3f}"
+        )
     header = (
         "range,calls,cpu_total_ms,cpu_per_call_ms,cuda_kernel_ms,kernels,"
         "memcpy_ms,memcpys,sync_ms,syncs,positive_alloc_mib,"

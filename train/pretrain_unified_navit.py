@@ -3,6 +3,7 @@
 
 import functools
 import gc
+import itertools
 import os
 import wandb
 import yaml
@@ -407,6 +408,10 @@ class TrainingArguments:
         default=False,
         metadata={"help": "Enable FLEX (flash-ext friendly) packing algorithm for sequence data."}
     )
+    h2d_non_blocking: bool = field(
+        default=True,
+        metadata={"help": "Enqueue pinned host-to-device batch copies asynchronously."},
+    )
 
     # --- optional PyTorch Profiler capture ---
     profile_dir: Optional[str] = field(
@@ -707,13 +712,34 @@ def main():
             with_stack=True,
         )
         profiler.start()
-    for micro_step, data in enumerate(train_loader):
+    train_iterator = iter(train_loader)
+    for micro_step in itertools.count():
         curr_step = train_step + micro_step // training_args.gradient_accumulation_steps
         if curr_step >= training_args.total_steps:
             logger.info(f"Reached total_steps={training_args.total_steps}, stopping training.")
             break
+        with torch.profiler.record_function("bagel::dataloader_next"):
+            data = next(train_iterator)
         with torch.profiler.record_function("bagel::h2d"):
-            data = data.cuda(device).to_dict()
+            data = data.cuda(
+                device, non_blocking=training_args.h2d_non_blocking
+            ).to_dict()
+        vit_token_count = (
+            data['packed_vit_token_indexes'].numel()
+            if 'packed_vit_token_indexes' in data else 0
+        )
+        vae_token_count = (
+            data['packed_vae_token_indexes'].numel()
+            if 'packed_vae_token_indexes' in data else 0
+        )
+        token_range = (
+            f"bagel::token_counts::seq={data['sequence_length']}"
+            f"::text={data['packed_text_indexes'].numel()}"
+            f"::vit={vit_token_count}"
+            f"::vae={vae_token_count}"
+        )
+        with torch.profiler.record_function(token_range):
+            pass
         data_indexes = data.pop('batch_data_indexes', None)
         ce_loss_weights = data.pop('ce_loss_weights', None)       
         tokens_tensor = torch.tensor(float(data['sequence_length']), device=device)
