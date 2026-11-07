@@ -544,33 +544,36 @@ class SimpleCustomBatch:
 
         return self
 
-    def cuda(self, device):
-        self.packed_text_ids = self.packed_text_ids.to(device)
-        self.packed_text_indexes = self.packed_text_indexes.to(device)
-        self.packed_position_ids = self.packed_position_ids.to(device)
+    def cuda(self, device, non_blocking=True):
+        self.packed_text_ids = self.packed_text_ids.to(device, non_blocking=non_blocking)
+        self.packed_text_indexes = self.packed_text_indexes.to(device, non_blocking=non_blocking)
+        self.packed_position_ids = self.packed_position_ids.to(device, non_blocking=non_blocking)
 
         if not self.use_flex:
-            self.nested_attention_masks = [item.to(device) for item in self.nested_attention_masks]
+            self.nested_attention_masks = [
+                item.to(device, non_blocking=non_blocking)
+                for item in self.nested_attention_masks
+            ]
 
         if hasattr(self, 'padded_images'):
-            self.padded_images = self.padded_images.to(device)
-            self.packed_vae_token_indexes = self.packed_vae_token_indexes.to(device)
-            self.packed_latent_position_ids = self.packed_latent_position_ids.to(device)
+            self.padded_images = self.padded_images.to(device, non_blocking=non_blocking)
+            self.packed_vae_token_indexes = self.packed_vae_token_indexes.to(device, non_blocking=non_blocking)
+            self.packed_latent_position_ids = self.packed_latent_position_ids.to(device, non_blocking=non_blocking)
 
         if hasattr(self, 'packed_timesteps'):
-            self.packed_timesteps = self.packed_timesteps.to(device)
-            self.mse_loss_indexes = self.mse_loss_indexes.to(device)
+            self.packed_timesteps = self.packed_timesteps.to(device, non_blocking=non_blocking)
+            self.mse_loss_indexes = self.mse_loss_indexes.to(device, non_blocking=non_blocking)
 
         if hasattr(self, 'packed_vit_tokens'):
-            self.packed_vit_tokens = self.packed_vit_tokens.to(device)
-            self.packed_vit_position_ids = self.packed_vit_position_ids.to(device)
-            self.packed_vit_token_indexes = self.packed_vit_token_indexes.to(device)
-            self.vit_token_seqlens = self.vit_token_seqlens.to(device)
+            self.packed_vit_tokens = self.packed_vit_tokens.to(device, non_blocking=non_blocking)
+            self.packed_vit_position_ids = self.packed_vit_position_ids.to(device, non_blocking=non_blocking)
+            self.packed_vit_token_indexes = self.packed_vit_token_indexes.to(device, non_blocking=non_blocking)
+            self.vit_token_seqlens = self.vit_token_seqlens.to(device, non_blocking=non_blocking)
 
         if hasattr(self, 'packed_label_ids'):
-            self.packed_label_ids = self.packed_label_ids.to(device)
-            self.ce_loss_indexes = self.ce_loss_indexes.to(device)
-            self.ce_loss_weights = self.ce_loss_weights.to(device)
+            self.packed_label_ids = self.packed_label_ids.to(device, non_blocking=non_blocking)
+            self.ce_loss_indexes = self.ce_loss_indexes.to(device, non_blocking=non_blocking)
+            self.ce_loss_weights = self.ce_loss_weights.to(device, non_blocking=non_blocking)
 
         return self
 
