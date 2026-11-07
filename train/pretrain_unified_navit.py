@@ -696,6 +696,7 @@ def main():
     total_norm = torch.tensor(0.0, device=device)
     token_window = 0.0
     seqlen_square_window = 0.0
+    world_size = dist.get_world_size()
     dense_token_factor, attn_factor = qwen2_flop_coefficients(model.language_model.config)
     profiler = None
     if training_args.profile_dir is not None:
@@ -749,14 +750,18 @@ def main():
             pass
         data_indexes = data.pop('batch_data_indexes', None)
         ce_loss_weights = data.pop('ce_loss_weights', None)       
-        tokens_tensor = torch.tensor(float(data['sequence_length']), device=device)
-        dist.all_reduce(tokens_tensor, op=dist.ReduceOp.SUM)
-        token_window += tokens_tensor.item()
-        if data['sample_lens']:
-            sample_lens_tensor = torch.tensor(data['sample_lens'], dtype=torch.float32, device=device)
-            sample_square = torch.dot(sample_lens_tensor, sample_lens_tensor)
-            dist.all_reduce(sample_square, op=dist.ReduceOp.SUM)
-            seqlen_square_window += sample_square.item()
+        if world_size == 1:
+            token_window += float(data['sequence_length'])
+            seqlen_square_window += sum(length * length for length in data['sample_lens'])
+        else:
+            tokens_tensor = torch.tensor(float(data['sequence_length']), device=device)
+            dist.all_reduce(tokens_tensor, op=dist.ReduceOp.SUM)
+            token_window += tokens_tensor.item()
+            if data['sample_lens']:
+                sample_lens_tensor = torch.tensor(data['sample_lens'], dtype=torch.float32, device=device)
+                sample_square = torch.dot(sample_lens_tensor, sample_lens_tensor)
+                dist.all_reduce(sample_square, op=dist.ReduceOp.SUM)
+                seqlen_square_window += sample_square.item()
 
         with torch.amp.autocast("cuda", enabled=True, dtype=torch.bfloat16):
             if training_args.visual_gen:
@@ -775,33 +780,37 @@ def main():
         loss = 0
         ce = loss_dict["ce"]
         if ce is not None:
-            total_ce_tokens = torch.tensor(len(data['ce_loss_indexes']), device=device)
-            dist.all_reduce(total_ce_tokens, op=dist.ReduceOp.SUM)
+            total_ce_tokens = len(data['ce_loss_indexes'])
+            if world_size > 1:
+                total_ce_tokens = torch.tensor(total_ce_tokens, device=device)
+                dist.all_reduce(total_ce_tokens, op=dist.ReduceOp.SUM)
             if training_args.ce_loss_reweighting:
                 ce = ce * ce_loss_weights
                 total_ce_loss_weights = ce_loss_weights.sum()
                 dist.all_reduce(total_ce_loss_weights, op=dist.ReduceOp.SUM)
-                ce = ce.sum() * dist.get_world_size() / total_ce_loss_weights
+                ce = ce.sum() * world_size / total_ce_loss_weights
             else:
-                ce = ce.sum() * dist.get_world_size() / total_ce_tokens
+                ce = ce.sum() * world_size / total_ce_tokens
             loss_dict["ce"] = ce.detach()
             loss = loss + ce * training_args.ce_weight
         else:
             assert not training_args.visual_und
             loss_dict["ce"] = torch.tensor(0, device=device)
-            total_ce_tokens = torch.tensor(0, device=device)
+            total_ce_tokens = 0 if world_size == 1 else torch.tensor(0, device=device)
 
         if training_args.visual_gen:
             mse = loss_dict["mse"]
-            total_mse_tokens = torch.tensor(len(data['mse_loss_indexes']), device=device)
-            dist.all_reduce(total_mse_tokens, op=dist.ReduceOp.SUM)
-            mse = mse.mean(dim=-1).sum() * dist.get_world_size() / total_mse_tokens
+            total_mse_tokens = len(data['mse_loss_indexes'])
+            if world_size > 1:
+                total_mse_tokens = torch.tensor(total_mse_tokens, device=device)
+                dist.all_reduce(total_mse_tokens, op=dist.ReduceOp.SUM)
+            mse = mse.mean(dim=-1).sum() * world_size / total_mse_tokens
             loss_dict["mse"] = mse.detach()
             loss = loss + mse * training_args.mse_weight
         else:
             assert not training_args.visual_gen
             loss_dict["mse"] = torch.tensor(0, device=device)
-            total_mse_tokens = torch.tensor(0, device=device)
+            total_mse_tokens = 0 if world_size == 1 else torch.tensor(0, device=device)
 
         loss = loss / training_args.gradient_accumulation_steps
         with torch.profiler.record_function("bagel::backward"):
@@ -818,8 +827,10 @@ def main():
         
         # Log loss values:
         if curr_step % training_args.log_every == 0:
-            total_samples = torch.tensor(len(data['sample_lens']), device=device)
-            dist.all_reduce(total_samples, op=dist.ReduceOp.SUM)
+            total_samples = len(data['sample_lens'])
+            if world_size > 1:
+                total_samples = torch.tensor(total_samples, device=device)
+                dist.all_reduce(total_samples, op=dist.ReduceOp.SUM)
 
             # Measure training speed:
             torch.cuda.synchronize()
@@ -836,9 +847,12 @@ def main():
             wandb_log = {}
             for key, value in loss_dict.items():
                 # Reduce loss history over all processes:
-                avg_loss = torch.tensor(value.item(), device=device)
-                dist.all_reduce(avg_loss, op=dist.ReduceOp.SUM)
-                avg_loss = avg_loss.item() / dist.get_world_size()
+                if world_size == 1:
+                    avg_loss = value.item()
+                else:
+                    avg_loss = value.clone()
+                    dist.all_reduce(avg_loss, op=dist.ReduceOp.SUM)
+                    avg_loss = avg_loss.item() / world_size
                 message += f"Train Loss {key}: {avg_loss:.4f}, "
                 wandb_log[key] = avg_loss
             message += f"Train Steps/Sec: {steps_per_sec:.2f}, Tokens/Sec: {tokens_per_sec/1000:.2f}k, MFU: {mfu_value*100:.1f}%, "
@@ -847,20 +861,22 @@ def main():
                 print(message, flush=True)
 
             wandb_log['lr'] = optimizer.param_groups[0]['lr']
-            wandb_log['total_mse_tokens'] = total_mse_tokens.item()
-            wandb_log['total_ce_tokens'] = total_ce_tokens.item()
+            wandb_log['total_mse_tokens'] = total_mse_tokens if world_size == 1 else total_mse_tokens.item()
+            wandb_log['total_ce_tokens'] = total_ce_tokens if world_size == 1 else total_ce_tokens.item()
             wandb_log['total_norm'] = total_norm.item()
-            wandb_log['total_samples'] = total_samples.item()
+            wandb_log['total_samples'] = total_samples if world_size == 1 else total_samples.item()
             wandb_log['tokens_per_sec'] = tokens_per_sec
             wandb_log['tokens_per_step'] = tokens_per_step
             wandb_log['actual_tflops'] = actual_tflops
             wandb_log['mfu'] = mfu_value
 
-            mem_allocated = torch.tensor(torch.cuda.max_memory_allocated() / 1024**2, device=device)
-            dist.all_reduce(mem_allocated, op=dist.ReduceOp.MAX)
+            mem_allocated = torch.cuda.max_memory_allocated() / 1024**2
+            mem_cache = torch.cuda.max_memory_reserved() / 1024**2
+            if world_size > 1:
+                memory = torch.tensor([mem_allocated, mem_cache], device=device)
+                dist.all_reduce(memory, op=dist.ReduceOp.MAX)
+                mem_allocated, mem_cache = memory.tolist()
             wandb_log['mem_allocated'] = mem_allocated
-            mem_cache = torch.tensor(torch.cuda.max_memory_reserved() / 1024**2, device=device)
-            dist.all_reduce(mem_cache, op=dist.ReduceOp.MAX)
             wandb_log['mem_cache'] = mem_cache
 
             if dist.get_rank() == 0:
