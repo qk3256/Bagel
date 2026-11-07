@@ -214,6 +214,36 @@ def main():
             "same_name_union_ms": union_duration_us(selected) / 1000,
         }
 
+    forward_origin_by_sequence = {}
+    for event in events:
+        if (
+            event.get("ph") != "X"
+            or event.get("cat") != "cpu_op"
+            or event.get("name") != "aten::index_put_"
+        ):
+            continue
+        sequence = event.get("args", {}).get("Sequence number")
+        if sequence is None:
+            continue
+        enclosing = [interval for interval in candidate_ranges(event) if contains(interval, event)]
+        if enclosing:
+            forward_origin_by_sequence[sequence] = min(
+                enclosing, key=lambda interval: interval["dur"]
+            )["name"]
+
+    index_backward_by_origin = collections.defaultdict(lambda: [0, 0.0])
+    for event in events:
+        if (
+            event.get("ph") != "X"
+            or event.get("cat") != "cpu_op"
+            or event.get("name") != "IndexPutBackward0"
+        ):
+            continue
+        sequence = event.get("args", {}).get("Sequence number")
+        origin = forward_origin_by_sequence.get(sequence, "unattributed")
+        index_backward_by_origin[origin][0] += 1
+        index_backward_by_origin[origin][1] += event.get("dur", 0.0)
+
     token_distributions = []
     for event in token_count_events:
         match = TOKEN_COUNTS_RE.fullmatch(event["name"])
@@ -239,6 +269,14 @@ def main():
         ),
         "token_distributions": token_distributions,
         "index_audit": audited_ops,
+        "index_backward_by_forward_range": {
+            name: {"calls": values[0], "inclusive_total_ms": values[1] / 1000}
+            for name, values in sorted(
+                index_backward_by_origin.items(),
+                key=lambda item: item[1][1],
+                reverse=True,
+            )
+        },
         "ranges": {},
     }
     for name, row in sorted(stats.items()):
@@ -285,6 +323,12 @@ def main():
             f"  {name}: calls={row['calls']}, "
             f"inclusive_total_ms={row['inclusive_total_ms']:.3f}, "
             f"same_name_union_ms={row['same_name_union_ms']:.3f}"
+        )
+    print("IndexPutBackward0 attributed to the innermost forward range:")
+    for name, row in result["index_backward_by_forward_range"].items():
+        print(
+            f"  {name}: calls={row['calls']}, "
+            f"inclusive_total_ms={row['inclusive_total_ms']:.3f}"
         )
     header = (
         "range,calls,cpu_total_ms,cpu_per_call_ms,cuda_kernel_ms,kernels,"
