@@ -148,83 +148,90 @@ class Bagel(PreTrainedModel):
             packed_timesteps: 1-D float tensor, flow timesteps. 0 indicates use clean image.
             mse_loss_indexes: 1-D bool tensor, where to compute mse loss.
         """
-        packed_text_embedding = self.language_model.model.embed_tokens(packed_text_ids)
-        packed_sequence = packed_text_embedding.new_zeros(size=(sequence_length, self.hidden_size))
-        packed_sequence[packed_text_indexes] = packed_text_embedding
+        with torch.profiler.record_function("bagel::token_assembly_text"):
+            packed_text_embedding = self.language_model.model.embed_tokens(packed_text_ids)
+            packed_sequence = packed_text_embedding.new_zeros(size=(sequence_length, self.hidden_size))
+            packed_sequence[packed_text_indexes] = packed_text_embedding
 
-        if nested_attention_masks is None:
-            sparse_mask = create_sparse_mask(sample_lens, split_lens, attn_modes, packed_text_embedding.device)
-            seqlen = sum(sample_lens)
-            block_mask = create_block_mask(
-                sparse_mask, B=1, H=self.num_heads, Q_LEN=seqlen, KV_LEN=seqlen, 
-                device=packed_text_embedding.device, BLOCK_SIZE=128, _compile=True
-            )
-            attention_mask = block_mask
-        else:
-            attention_mask = nested_attention_masks
+        with torch.profiler.record_function("bagel::attention_mask"):
+            if nested_attention_masks is None:
+                sparse_mask = create_sparse_mask(sample_lens, split_lens, attn_modes, packed_text_embedding.device)
+                seqlen = sum(sample_lens)
+                block_mask = create_block_mask(
+                    sparse_mask, B=1, H=self.num_heads, Q_LEN=seqlen, KV_LEN=seqlen,
+                    device=packed_text_embedding.device, BLOCK_SIZE=128, _compile=True
+                )
+                attention_mask = block_mask
+            else:
+                attention_mask = nested_attention_masks
 
         if self.config.visual_und:
-            cu_seqlens = torch.nn.functional.pad(torch.cumsum(vit_token_seqlens, dim=0), (1, 0))
-            cu_seqlens = cu_seqlens.to(torch.int32)
-            max_seqlen = torch.max(vit_token_seqlens).item()
-            packed_vit_token_embed = self.vit_model(
-                packed_pixel_values=packed_vit_tokens, 
-                packed_flattened_position_ids=packed_vit_position_ids,
-                cu_seqlens=cu_seqlens,
-                max_seqlen=max_seqlen,
-            )
-            packed_vit_token_embed = self.connector(packed_vit_token_embed)
-            vit_token_pos_emb = self.vit_pos_embed(packed_vit_position_ids)
-            packed_vit_token_embed = packed_vit_token_embed + vit_token_pos_emb
-            packed_sequence[packed_vit_token_indexes] = packed_vit_token_embed
+            with torch.profiler.record_function("bagel::vit_path"):
+                cu_seqlens = torch.nn.functional.pad(torch.cumsum(vit_token_seqlens, dim=0), (1, 0))
+                cu_seqlens = cu_seqlens.to(torch.int32)
+                max_seqlen = torch.max(vit_token_seqlens).item()
+                packed_vit_token_embed = self.vit_model(
+                    packed_pixel_values=packed_vit_tokens,
+                    packed_flattened_position_ids=packed_vit_position_ids,
+                    cu_seqlens=cu_seqlens,
+                    max_seqlen=max_seqlen,
+                )
+                packed_vit_token_embed = self.connector(packed_vit_token_embed)
+                vit_token_pos_emb = self.vit_pos_embed(packed_vit_position_ids)
+                packed_vit_token_embed = packed_vit_token_embed + vit_token_pos_emb
+                packed_sequence[packed_vit_token_indexes] = packed_vit_token_embed
 
         if self.config.visual_gen:
-            p = self.latent_patch_size
-            packed_latent = []
-            for latent, (h, w) in zip(padded_latent, patchified_vae_latent_shapes):
-                latent = latent[:, :h * p, :w * p].reshape(self.latent_channel, h, p, w, p)
-                latent = torch.einsum("chpwq->hwpqc", latent).reshape(-1, p * p * self.latent_channel)
-                packed_latent.append(latent)
-            packed_latent_clean = torch.cat(packed_latent, dim=0)
+            with torch.profiler.record_function("bagel::vae_token_assembly"):
+                p = self.latent_patch_size
+                packed_latent = []
+                for latent, (h, w) in zip(padded_latent, patchified_vae_latent_shapes):
+                    latent = latent[:, :h * p, :w * p].reshape(self.latent_channel, h, p, w, p)
+                    latent = torch.einsum("chpwq->hwpqc", latent).reshape(-1, p * p * self.latent_channel)
+                    packed_latent.append(latent)
+                packed_latent_clean = torch.cat(packed_latent, dim=0)
 
-            noise = torch.randn_like(packed_latent_clean)
-            packed_timesteps = torch.sigmoid(packed_timesteps)
-            packed_timesteps = self.timestep_shift * packed_timesteps / (1 + (self.timestep_shift - 1) * packed_timesteps)
-            packed_latent = (1 - packed_timesteps[:, None]) * packed_latent_clean + packed_timesteps[:, None] * noise
-            packed_timestep_embeds = self.time_embedder(packed_timesteps)
-            latent_token_pos_emb = self.latent_pos_embed(packed_latent_position_ids)
-            packed_latent = self.vae2llm(packed_latent) + packed_timestep_embeds + latent_token_pos_emb
-            packed_sequence[packed_vae_token_indexes] = packed_latent
+                noise = torch.randn_like(packed_latent_clean)
+                packed_timesteps = torch.sigmoid(packed_timesteps)
+                packed_timesteps = self.timestep_shift * packed_timesteps / (1 + (self.timestep_shift - 1) * packed_timesteps)
+                packed_latent = (1 - packed_timesteps[:, None]) * packed_latent_clean + packed_timesteps[:, None] * noise
+                packed_timestep_embeds = self.time_embedder(packed_timesteps)
+                latent_token_pos_emb = self.latent_pos_embed(packed_latent_position_ids)
+                packed_latent = self.vae2llm(packed_latent) + packed_timestep_embeds + latent_token_pos_emb
+                packed_sequence[packed_vae_token_indexes] = packed_latent
 
-        extra_inputs = {}
-        if self.use_moe:
-            packed_und_token_indexes = packed_text_indexes
-            if packed_vit_token_indexes is not None:
-                packed_und_token_indexes=torch.cat([packed_text_indexes, packed_vit_token_indexes], dim=0)
-            extra_inputs.update(
-                packed_und_token_indexes=packed_und_token_indexes,
-                packed_gen_token_indexes=packed_vae_token_indexes,
+        with torch.profiler.record_function("bagel::mot_index_build"):
+            extra_inputs = {}
+            if self.use_moe:
+                packed_und_token_indexes = packed_text_indexes
+                if packed_vit_token_indexes is not None:
+                    packed_und_token_indexes = torch.cat([packed_text_indexes, packed_vit_token_indexes], dim=0)
+                extra_inputs.update(
+                    packed_und_token_indexes=packed_und_token_indexes,
+                    packed_gen_token_indexes=packed_vae_token_indexes,
+                )
+
+        with torch.profiler.record_function("bagel::mot_transformer"):
+            last_hidden_state = self.language_model(
+                packed_sequence=packed_sequence,
+                sample_lens=sample_lens,
+                attention_mask=attention_mask,
+                packed_position_ids=packed_position_ids,
+                **extra_inputs,
             )
 
-        last_hidden_state = self.language_model(
-            packed_sequence=packed_sequence,
-            sample_lens=sample_lens,
-            attention_mask=attention_mask,
-            packed_position_ids=packed_position_ids,
-            **extra_inputs,
-        )
+        with torch.profiler.record_function("bagel::loss_heads"):
+            mse = None
+            if self.config.visual_gen:
+                packed_mse_preds = self.llm2vae(last_hidden_state[mse_loss_indexes])
+                target = noise - packed_latent_clean # NOTE: v_t=dx_t/dt=x_1-x_0, pointing from data to noise
+                has_mse = packed_timesteps > 0
+                mse = (packed_mse_preds - target[has_mse]) ** 2
 
-        mse = None
-        if self.config.visual_gen:
-            packed_mse_preds = self.llm2vae(last_hidden_state[mse_loss_indexes])
-            target = noise - packed_latent_clean # NOTE: v_t=dx_t/dt=x_1-x_0, pointing from data to noise
-            has_mse = packed_timesteps > 0
-            mse = (packed_mse_preds - target[has_mse]) ** 2
-
-        ce = None
-        if ce_loss_indexes is not None:
-            packed_ce_preds = self.language_model.lm_head(last_hidden_state[ce_loss_indexes])
-            ce = F.cross_entropy(packed_ce_preds, packed_label_ids, reduction="none")
+            ce = None
+            if ce_loss_indexes is not None:
+                packed_ce_preds = self.language_model.lm_head(last_hidden_state[ce_loss_indexes])
+                ce = F.cross_entropy(packed_ce_preds, packed_label_ids, reduction="none")
 
         return dict(mse=mse, ce=ce)
 

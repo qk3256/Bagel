@@ -721,35 +721,38 @@ class Qwen2MoTDecoderLayer(nn.Module):
     ) -> torch.Tensor:
 
         residual = packed_sequence
-        packed_sequence_ = packed_sequence.new_zeros(packed_sequence.shape)
-        packed_sequence_[packed_und_token_indexes] = self.input_layernorm(packed_sequence[packed_und_token_indexes])
-        packed_sequence_[packed_gen_token_indexes] = self.input_layernorm_moe_gen(packed_sequence[packed_gen_token_indexes])
+        with torch.profiler.record_function("bagel::mot_route_input"):
+            packed_sequence_ = packed_sequence.new_zeros(packed_sequence.shape)
+            packed_sequence_[packed_und_token_indexes] = self.input_layernorm(packed_sequence[packed_und_token_indexes])
+            packed_sequence_[packed_gen_token_indexes] = self.input_layernorm_moe_gen(packed_sequence[packed_gen_token_indexes])
 
         # Self Attention
-        packed_sequence_ = self.self_attn(
-            packed_sequence=packed_sequence_,
-            sample_lens=sample_lens,
-            attention_mask=attention_mask,
-            packed_position_embeddings=packed_position_embeddings,
-            packed_und_token_indexes=packed_und_token_indexes,
-            packed_gen_token_indexes=packed_gen_token_indexes,
-        )
+        with torch.profiler.record_function("bagel::mot_attention"):
+            packed_sequence_ = self.self_attn(
+                packed_sequence=packed_sequence_,
+                sample_lens=sample_lens,
+                attention_mask=attention_mask,
+                packed_position_embeddings=packed_position_embeddings,
+                packed_und_token_indexes=packed_und_token_indexes,
+                packed_gen_token_indexes=packed_gen_token_indexes,
+            )
         if self.freeze_und:
             packed_sequence_[packed_und_token_indexes] = packed_sequence_[packed_und_token_indexes].detach()
         packed_sequence = residual + packed_sequence_
 
         # Fully Connected
         residual = packed_sequence
-        packed_sequence_ = packed_sequence.new_zeros(packed_sequence.shape)
-        packed_sequence_[packed_und_token_indexes] = self.mlp(
-            self.post_attention_layernorm(packed_sequence[packed_und_token_indexes])
-        )
-        if self.freeze_und:
-            packed_sequence_[packed_und_token_indexes] = packed_sequence_[packed_und_token_indexes].detach()
-    
-        packed_sequence_[packed_gen_token_indexes] = self.mlp_moe_gen(
-            self.post_attention_layernorm_moe_gen(packed_sequence[packed_gen_token_indexes])
-        )
+        with torch.profiler.record_function("bagel::mot_mlp_experts"):
+            packed_sequence_ = packed_sequence.new_zeros(packed_sequence.shape)
+            packed_sequence_[packed_und_token_indexes] = self.mlp(
+                self.post_attention_layernorm(packed_sequence[packed_und_token_indexes])
+            )
+            if self.freeze_und:
+                packed_sequence_[packed_und_token_indexes] = packed_sequence_[packed_und_token_indexes].detach()
+
+            packed_sequence_[packed_gen_token_indexes] = self.mlp_moe_gen(
+                self.post_attention_layernorm_moe_gen(packed_sequence[packed_gen_token_indexes])
+            )
         packed_sequence = residual + packed_sequence_
 
         return packed_sequence

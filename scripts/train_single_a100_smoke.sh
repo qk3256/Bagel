@@ -40,4 +40,5 @@ export TOKENIZERS_PARALLELISM=false
   --wandb_offline True \
   --results_dir "$RESULTS_DIR" \
   --checkpoint_dir "$RESULTS_DIR/checkpoints" \
-  --wandb_name "$RUN_NAME"
+  --wandb_name "$RUN_NAME" \
+  "$@"

@@ -712,7 +712,8 @@ def main():
         if curr_step >= training_args.total_steps:
             logger.info(f"Reached total_steps={training_args.total_steps}, stopping training.")
             break
-        data = data.cuda(device).to_dict()
+        with torch.profiler.record_function("bagel::h2d"):
+            data = data.cuda(device).to_dict()
         data_indexes = data.pop('batch_data_indexes', None)
         ce_loss_weights = data.pop('ce_loss_weights', None)       
         tokens_tensor = torch.tensor(float(data['sequence_length']), device=device)
@@ -727,9 +728,11 @@ def main():
         with torch.amp.autocast("cuda", enabled=True, dtype=torch.bfloat16):
             if training_args.visual_gen:
                 with torch.no_grad():
-                    data['padded_latent'] = vae_model.encode(data.pop('padded_images'))
+                    with torch.profiler.record_function("bagel::vae_encode"):
+                        data['padded_latent'] = vae_model.encode(data.pop('padded_images'))
             try:
-                loss_dict = fsdp_model(**data)
+                with torch.profiler.record_function("bagel::model_forward"):
+                    loss_dict = fsdp_model(**data)
             except RuntimeError as e:
                 if "out of memory" in str(e).lower():
                     logger.error(f"CUDA OOM at step {curr_step}: {e}")
@@ -768,13 +771,16 @@ def main():
             total_mse_tokens = torch.tensor(0, device=device)
 
         loss = loss / training_args.gradient_accumulation_steps
-        loss.backward()
+        with torch.profiler.record_function("bagel::backward"):
+            loss.backward()
 
         if (micro_step + 1) % training_args.gradient_accumulation_steps == 0:
             total_norm = fsdp_model.clip_grad_norm_(training_args.max_grad_norm)
-            optimizer.step()
+            with torch.profiler.record_function("bagel::optimizer_step"):
+                optimizer.step()
             scheduler.step()
-            fsdp_ema_update(ema_model, fsdp_model, decay=training_args.ema)
+            with torch.profiler.record_function("bagel::ema_update"):
+                fsdp_ema_update(ema_model, fsdp_model, decay=training_args.ema)
             optimizer.zero_grad()
         
         # Log loss values:
