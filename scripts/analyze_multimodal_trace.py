@@ -193,8 +193,11 @@ def main():
     audited_op_names = (
         "IndexPutBackward0",
         "autograd::engine::evaluate_function: IndexPutBackward0",
+        "IndexCopyBackward0",
+        "autograd::engine::evaluate_function: IndexCopyBackward0",
         "aten::index_put_",
         "aten::_index_put_impl_",
+        "aten::index_copy",
         "aten::index",
     )
     audited_ops = {}
@@ -219,7 +222,7 @@ def main():
         if (
             event.get("ph") != "X"
             or event.get("cat") != "cpu_op"
-            or event.get("name") != "aten::index_put_"
+            or event.get("name") not in {"aten::index_put_", "aten::index_copy"}
         ):
             continue
         sequence = event.get("args", {}).get("Sequence number")
@@ -232,17 +235,23 @@ def main():
             )["name"]
 
     index_backward_by_origin = collections.defaultdict(lambda: [0, 0.0])
+    index_copy_backward_by_origin = collections.defaultdict(lambda: [0, 0.0])
     for event in events:
         if (
             event.get("ph") != "X"
             or event.get("cat") != "cpu_op"
-            or event.get("name") != "IndexPutBackward0"
+            or event.get("name") not in {"IndexPutBackward0", "IndexCopyBackward0"}
         ):
             continue
         sequence = event.get("args", {}).get("Sequence number")
         origin = forward_origin_by_sequence.get(sequence, "unattributed")
-        index_backward_by_origin[origin][0] += 1
-        index_backward_by_origin[origin][1] += event.get("dur", 0.0)
+        target = (
+            index_backward_by_origin
+            if event["name"] == "IndexPutBackward0"
+            else index_copy_backward_by_origin
+        )
+        target[origin][0] += 1
+        target[origin][1] += event.get("dur", 0.0)
 
     token_distributions = []
     for event in token_count_events:
@@ -273,6 +282,14 @@ def main():
             name: {"calls": values[0], "inclusive_total_ms": values[1] / 1000}
             for name, values in sorted(
                 index_backward_by_origin.items(),
+                key=lambda item: item[1][1],
+                reverse=True,
+            )
+        },
+        "index_copy_backward_by_forward_range": {
+            name: {"calls": values[0], "inclusive_total_ms": values[1] / 1000}
+            for name, values in sorted(
+                index_copy_backward_by_origin.items(),
                 key=lambda item: item[1][1],
                 reverse=True,
             )
@@ -326,6 +343,12 @@ def main():
         )
     print("IndexPutBackward0 attributed to the innermost forward range:")
     for name, row in result["index_backward_by_forward_range"].items():
+        print(
+            f"  {name}: calls={row['calls']}, "
+            f"inclusive_total_ms={row['inclusive_total_ms']:.3f}"
+        )
+    print("IndexCopyBackward0 attributed to the innermost forward range:")
+    for name, row in result["index_copy_backward_by_forward_range"].items():
         print(
             f"  {name}: calls={row['calls']}, "
             f"inclusive_total_ms={row['inclusive_total_ms']:.3f}"

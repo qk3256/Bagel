@@ -743,16 +743,22 @@ class Qwen2MoTDecoderLayer(nn.Module):
         # Fully Connected
         residual = packed_sequence
         with torch.profiler.record_function("bagel::mot_mlp_experts"):
-            packed_sequence_ = packed_sequence.new_zeros(packed_sequence.shape)
-            packed_sequence_[packed_und_token_indexes] = self.mlp(
+            und_output = self.mlp(
                 self.post_attention_layernorm(packed_sequence[packed_und_token_indexes])
             )
             if self.freeze_und:
-                packed_sequence_[packed_und_token_indexes] = packed_sequence_[packed_und_token_indexes].detach()
+                und_output = und_output.detach()
 
-            packed_sequence_[packed_gen_token_indexes] = self.mlp_moe_gen(
+            gen_output = self.mlp_moe_gen(
                 self.post_attention_layernorm_moe_gen(packed_sequence[packed_gen_token_indexes])
             )
+            expert_indexes = torch.cat(
+                (packed_und_token_indexes, packed_gen_token_indexes), dim=0
+            )
+            expert_output = torch.cat((und_output, gen_output), dim=0)
+            packed_sequence_ = packed_sequence.new_zeros(
+                packed_sequence.shape
+            ).index_copy(0, expert_indexes, expert_output)
         packed_sequence = residual + packed_sequence_
 
         return packed_sequence
