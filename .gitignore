@@ -15,5 +15,12 @@ models/
 data/bagel_example/
 data/bagel_real_profile/
 traces/
+!artifacts/
+!artifacts/traces/
+!artifacts/traces/README.md
+!artifacts/traces/parts/
+!artifacts/traces/parts/*.part*
+!artifacts/traces/parts/SHA256SUMS
+artifacts/traces/*.tar.gz
 *.pt.trace.json
 *.nsys-rep
